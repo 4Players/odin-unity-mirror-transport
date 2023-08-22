@@ -1,0 +1,26 @@
+{
+  "name": "io.fourplayers.odin.mirror.transport",
+  "displayName": "4Players ODIN Transport for Mirror Networking",
+  "version": "0.1.0",
+  "unity": "2019.4",
+  "description": "4Players ODIN Transport for Mirror. Uses 4Players ODIN server for relay and NAT punchthrough and includes real-time 3D spatial voice chat out of the box.",
+  "dependencies": {
+    "io.fourplayers.odin": "1.4.1"
+  },
+  "documentationUrl": "https://www.4players.io/odin/",
+  "keywords": [
+    "odin",
+    "transport",
+    "relay",
+    "networking",
+    "4players",
+    "multiplayer",
+    "mirror"
+  ],
+  "author": {
+    "name": "4Players GmbH",
+    "email": "info@4players.io",
+    "url": "https://www.4players.io"
+  },
+  "hideInEditor": false
+}
