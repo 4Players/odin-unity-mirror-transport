@@ -161,7 +161,6 @@ public class OdinTransport : Transport
         OdinHandler.Instance.OnPeerJoined.AddListener(OnPeerJoined);
         OdinHandler.Instance.OnPeerLeft.AddListener(OnPeerLeft);
         OdinHandler.Instance.OnMessageReceived.AddListener(OnMessageReceived);
-        OdinHandler.Instance.OnConnectionStateChanged.AddListener(OnConnectionStateChanged);
     }
 
     /// <summary>
@@ -174,13 +173,15 @@ public class OdinTransport : Transport
         OdinHandler.Instance.OnPeerJoined.RemoveListener(OnPeerJoined);
         OdinHandler.Instance.OnPeerLeft.RemoveListener(OnPeerLeft);
         OdinHandler.Instance.OnMessageReceived.RemoveListener(OnMessageReceived);
-        OdinHandler.Instance.OnConnectionStateChanged.RemoveListener(OnConnectionStateChanged);
 
         // We don't remove the OnRoomLeft event as we need it to reset the connection state, we'll clear that later
     }
 
     private void JoinOdinRoom(string roomId, OdinTransportPeerType peerType)
     {
+        if (_isConnected)
+            return;
+        Debug.Log($"Joining Odin Room ${roomId} as type {peerType}");
         // Set the room id
         _roomId = roomId;
 
@@ -228,7 +229,6 @@ public class OdinTransport : Transport
         // If we are the host we don't need to connect again
         if (_isServer && _isConnected)
         {
-            // Directly call the callback as we are already connected to the server
             OnClientConnected?.Invoke();
             return;
         }
@@ -248,7 +248,8 @@ public class OdinTransport : Transport
     /// <param name="channelId"></param>
     public override void ClientSend(ArraySegment<byte> segment, int channelId = Channels.Reliable)
     {
-        if (!_isServer && OdinHandler.Instance.Rooms.Contains(_roomId))
+        bool isConnectedToTargetRoom = OdinHandler.Instance.Rooms.Contains(_roomId);
+        if (!_isServer && isConnectedToTargetRoom)
         {
             if (_hostPeerId <= 0)
             {
@@ -401,11 +402,12 @@ public class OdinTransport : Transport
             if (debug) Debug.Log("ODIN Transport: ServerStop");
             // Remove all listeners except the room left listener (we need that event to clean up)
             RemoveOdinEventHandlers();
-
-            _isServer = false;            
             
             // Leave the room
             OdinHandler.Instance.LeaveRoom(_roomId);
+            _connectedRoom = null;
+            _isConnected = false;
+            _isServer = false;
         }
     }
 
@@ -452,6 +454,7 @@ public class OdinTransport : Transport
 
         if (!_isServer)
         {
+            
             Debug.Log($"ODIN Transport: Connected to room with peers: {_connectedRoom.RemotePeers.Count}");
             foreach (var remotePeer in _connectedRoom.RemotePeers)
             {
@@ -593,38 +596,11 @@ public class OdinTransport : Transport
                 if (debug) Debug.Log("ODIN Transport: OnClientConnected called in OnMessageReceived");
                 OnClientConnected?.Invoke();
             }
-            
-            //if (debug) Debug.Log($"ODIN Transport: OnClientDataReceived called, {arg1.Data.Length} bytes");
-            OnClientDataReceived?.Invoke(new ArraySegment<byte>(arg1.Data), Channels.Reliable);   
-        }
-    }
-
-    /// <summary>
-    /// Handles Odin connection changes. We use this to disconnect the client
-    /// </summary>
-    /// <param name="arg0"></param>
-    /// <param name="arg1"></param>
-    private void OnConnectionStateChanged(object arg0, ConnectionStateChangedEventArgs arg1)
-    {
-        // Check if the room id matches the room id we are connected to for networking
-        var room = arg0 as Room;
-        if (room?.GetRoomId() != _roomId)
-        {
-            return;
-        }
         
-        if (_isServer)
-        {
-            if (arg1.ConnectionState == NativeBindings.OdinRoomConnectionState.Disconnected)
-            {
-                // We are the server and the connection to ODIN disconnected. We just clean up
-            }
+            //if (debug) Debug.Log($"ODIN Transport: OnClientDataReceived called, {arg1.Data.Length} bytes");
+            OnClientDataReceived?.Invoke(new ArraySegment<byte>(arg1.Data), Channels.Reliable);  
         }
-
-        Debug.Log($"ODIN Transport: OnConnectionStateChanged: {arg1.ConnectionState}, {arg1.ChangeReason}");
     }
-    
-
     #endregion
     
 }
