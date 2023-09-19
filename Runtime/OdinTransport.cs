@@ -7,7 +7,6 @@ using OdinNative.Odin.Media;
 using OdinNative.Odin.Peer;
 using OdinNative.Odin.Room;
 using UnityEngine;
-using UnityEngine.Events;
 
 /// <summary>
 /// Struct that holds the information about a pending media stream. If 3D audio is enabled we need to add the PlaybackComponent
@@ -119,14 +118,6 @@ public class OdinTransport : Transport
     /// </summary>
     [Tooltip("If true, the transport will log all messages to the console")]
     public bool debug = false;
-    
-    [Header("3D Audio")]
-    [Tooltip("If true will use positional audio for the voice chat, i.e. the voice will be located at the position of the player")]
-    public bool positionalAudio = false;
-    
-    [Tooltip("Defines the spatial blend of the audio source. 0.0 is 2D, 1.0 is 3D")]
-    [Range(0.0f, 1.0f)]
-    public float spatialBlend = 1.0f;
 
     /// <summary>
     /// Set to true after the connection to the ODIN room has been established
@@ -155,13 +146,6 @@ public class OdinTransport : Transport
     /// </summary>
     private ulong _hostPeerId = 0;
 
-    /// <summary>
-    /// Stores all pending media streams. This is required as the OnMediaAdded event is called before the player object
-    /// has been created and 3D positional audio is enabled. In this case we have to wait until the player object is
-    /// spawned.
-    /// </summary>
-    private List<OdinPendingMediaStream> _pendingMediaStreams = new List<OdinPendingMediaStream>();
-
     public Action<string> OnNoServerFound;
     
 
@@ -178,12 +162,6 @@ public class OdinTransport : Transport
         OdinHandler.Instance.OnPeerLeft.AddListener(OnPeerLeft);
         OdinHandler.Instance.OnMessageReceived.AddListener(OnMessageReceived);
         OdinHandler.Instance.OnConnectionStateChanged.AddListener(OnConnectionStateChanged);
-
-        if (positionalAudio)
-        {
-            OdinHandler.Instance.OnMediaAdded.AddListener(OnMediaAdded);
-            OdinHandler.Instance.OnMediaRemoved.AddListener(OnMediaRemoved);   
-        }
     }
 
     /// <summary>
@@ -197,13 +175,6 @@ public class OdinTransport : Transport
         OdinHandler.Instance.OnPeerLeft.RemoveListener(OnPeerLeft);
         OdinHandler.Instance.OnMessageReceived.RemoveListener(OnMessageReceived);
         OdinHandler.Instance.OnConnectionStateChanged.RemoveListener(OnConnectionStateChanged);
-
-        // Remove media management events if we are using positional audio
-        if (positionalAudio)
-        {
-            OdinHandler.Instance.OnMediaAdded.RemoveListener(OnMediaAdded);
-            OdinHandler.Instance.OnMediaRemoved.RemoveListener(OnMediaRemoved);   
-        }
 
         // We don't remove the OnRoomLeft event as we need it to reset the connection state, we'll clear that later
     }
@@ -261,14 +232,7 @@ public class OdinTransport : Transport
             OnClientConnected?.Invoke();
             return;
         }
-        
-        // If positional audio is enabled, we disable automatic media management of the Odin Handler and handle media
-        // management ourselves
-        if (positionalAudio)
-        {
-            OdinHandler.Instance.CreatePlayback = false;
-        }
-        
+
         // Setup the ODIN event handlers
         SetupOdinEventHandlers();
         
@@ -464,30 +428,6 @@ public class OdinTransport : Transport
         ServerStop();
     }
 
-    /// <summary>
-    /// Check if we have any pending media streams and try to add a playback component to the player object
-    /// </summary>
-    public override void ClientLateUpdate()
-    {
-        base.ClientLateUpdate();
-        
-        if (!NetworkClient.active) return;
-        
-        if (_pendingMediaStreams.Count > 0)
-        {
-            for (int i=0;i<_pendingMediaStreams.Count;i++)
-            {
-                OdinPendingMediaStream mediaStream = _pendingMediaStreams[i];
-                // Try to find a player object for the media stream, if found, remove from the list
-                var playerIdentity = TryAddPlaybackComponent(mediaStream);
-                if (playerIdentity != null)
-                {
-                    _pendingMediaStreams.RemoveAt(i);    
-                }
-            }
-        }
-    }
-
     #endregion
 
     #region Odin Callbacks
@@ -585,7 +525,6 @@ public class OdinTransport : Transport
             {
                 // We don't let this guy in - he will time out as he does not receive any answer from us
                 Debug.LogWarning("Another server tried to connect, we are not letting him in.");
-                ServerStop();
             }
             else
             {
@@ -684,103 +623,8 @@ public class OdinTransport : Transport
 
         Debug.Log($"ODIN Transport: OnConnectionStateChanged: {arg1.ConnectionState}, {arg1.ChangeReason}");
     }
-
-    /// <summary>
-    /// Handles OnMediaAdded events sent from ODIN. This is called when a new media stream is added to the room. If
-    /// positional audio is activated we need to add a playback component to the player object. If this is a server, we
-    /// need to set the connectionId to 0 as the server is always connection 0 (although it has a different PeerId, the
-    /// host is a special case). If the players game object has not been spawned yet, we put the media stream and other
-    /// info in the OdinPendingMediaStream struct and wait for the player to be spawned (checked in ClientLateUpdate).
-    /// </summary>
-    /// <param name="arg0"></param>
-    /// <param name="arg1"></param>
-    private void OnMediaAdded(object arg0, MediaAddedEventArgs arg1)
-    {
-        // Don't handle media if this is just a server
-        if (!NetworkClient.active) return;
-
-        var odinPendingMediaStream = new OdinPendingMediaStream();
-        odinPendingMediaStream.mediaStream = arg1.Media;
-        odinPendingMediaStream.peerId = arg1.Peer.Id;
-        odinPendingMediaStream.connectionId = (int)arg1.Media.GetPeerId();
-        if (IsPeerServer(arg1.Peer))
-        {
-            // For hosts, the connection id is 0, so we need to use that as the peer id
-            odinPendingMediaStream.connectionId = 0;
-        }
-        
-        var playerObject = TryAddPlaybackComponent(odinPendingMediaStream);
-        if (playerObject == null)
-        {
-            _pendingMediaStreams.Add(odinPendingMediaStream);
-        }
-    }
     
-    /// <summary>
-    /// This does nothing as the PlaybackComponent destroys itself when the media stream is removed
-    /// </summary>
-    /// <param name="arg0"></param>
-    /// <param name="arg1"></param>
-    private void OnMediaRemoved(object arg0, MediaRemovedEventArgs arg1)
-    {
-        // Nothing to do as the playback component is auto destroyed
-    }
 
     #endregion
     
-    #region Odin Positional Audio
-    
-    /// <summary>
-    /// Helper function to find the players game object for a given connection id. The connection id is the same as the
-    /// the peer id in ODIN - with the exception of the host, which is always 0 (even though it has a different peer id).
-    /// This is how mirror handles it, and we need to adept accordingly.
-    /// </summary>
-    /// <param name="connectionId"></param>
-    /// <returns></returns>
-    private OdinPositionalAudio GetPlayerForConnectionId(int connectionId)
-    {
-        // Find in spawned
-        foreach (var identity in NetworkClient.spawned.Values)
-        {
-            if (identity.TryGetComponent<OdinPositionalAudio>(out OdinPositionalAudio positionalAudio))
-            {
-                if (positionalAudio.connectionId == connectionId)
-                {
-                    Debug.Log($"Found the player with net id {positionalAudio.netId} for the connection id {connectionId}");
-                    return positionalAudio;
-                }
-            }
-        }
-
-        return null;
-    }
-    
-    /// <summary>
-    /// Try to add a playback component to the player object. If the player object has not been spawned yet, we do nothing
-    /// The `spatialBlend` value is set to the `spatialBlend` value set globally in this object. 
-    /// </summary>
-    /// <param name="pendingMediaStream"></param>
-    /// <returns></returns>
-    private NetworkIdentity TryAddPlaybackComponent(OdinPendingMediaStream pendingMediaStream)
-    {
-        var connectionId = (int)pendingMediaStream.connectionId;
-        //Debug.Log(connectionId);
-        OdinPositionalAudio positionalAudio = GetPlayerForConnectionId(connectionId);
-        if (positionalAudio)
-        {
-            var playbackComponent = OdinHandler.Instance.AddPlaybackComponent(positionalAudio.PlaybackSource ? positionalAudio.PlaybackSource : positionalAudio.gameObject, NetworkManager.singleton.networkAddress, pendingMediaStream.peerId, pendingMediaStream.mediaStream.Id);
-                        
-            // Activate full 3D audio
-            playbackComponent.PlaybackSource.spatialBlend = spatialBlend;
-            playbackComponent.AutoDestroyAudioSource = true;
-            playbackComponent.AutoDestroyMediaStream = true;
-                
-            Debug.Log("ODIN Transport: OnMediaAdded, found Player object: " + positionalAudio.gameObject.name);
-            return positionalAudio.netIdentity;
-        }
-
-        return null;
-    }
-    
-    #endregion
 }
