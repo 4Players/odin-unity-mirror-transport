@@ -34,6 +34,18 @@ public enum OdinTransportPeerType
 }
 
 /// <summary>
+/// Used to allow users to set the debug level. 
+/// </summary>
+public enum OdinTransportDebugLevel
+{
+    None = 0,
+    Information = 1,
+    Log = 2,
+    Verbose = 3
+}
+
+
+/// <summary>
 /// Implementation of the User Data used by the Odin Transport. It's a simple flag that indicates if the peer is a server
 /// or a client. As Mirror already provides tools to store user data like SyncVars, we don't need to use the Odin User Data
 /// interface for that. However, if required, you can override this class and implement the IUserData interface to store
@@ -118,7 +130,7 @@ public class OdinTransport : Transport
     /// If true, the transport will log all messages to the console
     /// </summary>
     [Tooltip("If true, the transport will log all messages to the console")]
-    public bool debug = false;
+    public OdinTransportDebugLevel debugLevel = OdinTransportDebugLevel.None;
 
     /// <summary>
     /// Set to true after the connection to the ODIN room has been established
@@ -182,7 +194,7 @@ public class OdinTransport : Transport
     {
         if (_isConnected)
             return;
-        if (debug) Debug.Log($"ODIN Transport: Joining Odin Room ${roomId} as type {peerType}");
+        LogDefault($"ODIN Transport: Joining Odin Room ${roomId} as type {peerType}");
         // Set the room id
         _roomId = roomId;
 
@@ -225,7 +237,7 @@ public class OdinTransport : Transport
     /// <param name="room">Provide the room to connect as the network address</param>
     public override void ClientConnect(string room)
     {
-        if (debug) Debug.Log($"ODIN Transport: ClientConnect to room id {room}");
+        LogDefault($"ODIN Transport: ClientConnect to room id {room}");
 
         // If we are the host we don't need to connect again
         if (_isServer && _isConnected)
@@ -249,6 +261,9 @@ public class OdinTransport : Transport
     /// <param name="channelId"></param>
     public override void ClientSend(ArraySegment<byte> segment, int channelId = Channels.Reliable)
     {
+        if (!OdinHandler.Instance || !OdinHandler.Instance.Rooms.Contains(_roomId))
+            return;
+
         if (!_isServer)
         {
             if (_hostPeerId <= 0)
@@ -264,7 +279,7 @@ public class OdinTransport : Transport
                 return;
             }
 
-            if (debug) Debug.Log($"ODIN Transport: ClientSend, isServer: {_isServer}");
+            LogVerbose($"ODIN Transport: ClientSend, isServer: {_isServer}");
 
             byte[] data = new byte[segment.Count];
             Array.Copy(segment.Array, segment.Offset, data, 0, segment.Count);
@@ -277,7 +292,7 @@ public class OdinTransport : Transport
                 Debug.LogError("OdinTransport::ClientSend - _connectedRoom is invalid");
             else
             {
-                if (debug) Debug.Log($"Sending message in room {_connectedRoom} to host {_hostPeerId}");
+                LogVerbose($"Sending message in room {_connectedRoom} to host {_hostPeerId}");
                 _connectedRoom?.SendMessageAsync(peerIdList, data);
 
                 OnClientDataSent?.Invoke(segment, channelId);
@@ -293,12 +308,11 @@ public class OdinTransport : Transport
         if (NetworkManager.singleton.mode == NetworkManagerMode.ServerOnly)
         {
             // We are host, although we close our client connection we still want to keep the server running
-            if (debug)
-                Debug.Log($"ODIN Transport: Disconnecting client but leaving ODIN connection and server running");
+            LogDefault("ODIN Transport: Disconnecting client but leaving ODIN connection and server running");
             return;
         }
 
-        if (debug) Debug.Log($"ODIN Transport: Client Disconnect");
+        if (debugLevel >= OdinTransportDebugLevel.Information) Debug.Log($"ODIN Transport: Client Disconnect");
 
         // Remove all listeners except the room left listener (we need that event to clean up)
         RemoveOdinEventHandlers();
@@ -331,7 +345,7 @@ public class OdinTransport : Transport
     /// </summary>
     public override void ServerStart()
     {
-        if (debug) Debug.Log("ODIN Transport: ServerStart");
+        LogDefault("ODIN Transport: ServerStart");
         _isServer = true;
 
         // Setup the ODIN event handlers
@@ -363,11 +377,12 @@ public class OdinTransport : Transport
         {
             if (_connectedRoom == null)
             {
-                if (debug) Debug.LogError("ODIN Transport: Could not send message, no room connected");
+                LogVerbose("ODIN Transport: Could not send message, no room connected");
                 return;
             }
 
-            if (debug) Debug.Log($"ODIN Transport: ServerSend, {segment.Count} bytes to {connectionId}");
+            LogVerbose($"ODIN Transport: ServerSend, {segment.Count} bytes to {connectionId}");
+
             ulong[] peerIdList = new ulong[1];
             peerIdList[0] = (ulong)connectionId;
 
@@ -409,7 +424,7 @@ public class OdinTransport : Transport
 
         if (_isServer)
         {
-            if (debug) Debug.Log("ODIN Transport: ServerStop");
+            LogDefault("ODIN Transport: ServerStop");
             // Remove all listeners except the room left listener (we need that event to clean up)
             RemoveOdinEventHandlers();
 
@@ -436,7 +451,7 @@ public class OdinTransport : Transport
     /// </summary>
     public override void Shutdown()
     {
-        if (debug) Debug.Log("ODIN Transport: Shutdown");
+        LogDefault("ODIN Transport: Shutdown");
 
         ServerStop();
     }
@@ -474,7 +489,7 @@ public class OdinTransport : Transport
             {
                 if (IsPeerServer(remotePeer))
                 {
-                    if (debug) Debug.Log("ODIN Transport: OnClientConnected called");
+                    LogDefault("ODIN Transport: OnClientConnected called");
 
                     OnClientConnected?.Invoke();
                     return;
@@ -514,8 +529,7 @@ public class OdinTransport : Transport
 
         if (!_isServer)
         {
-            if (debug) Debug.Log("ODIN Transport: OnClientDisconnected called");
-
+            LogDefault("ODIN Transport: OnClientDisconnected called.");
             OnClientDisconnected?.Invoke();
         }
     }
@@ -554,9 +568,8 @@ public class OdinTransport : Transport
             }
             else
             {
-                if (debug)
-                    Debug.Log(
-                        $"ODIN Transport: OnServerConnected called with connectionId: {peerJoinedEventArgs.Peer.Id}");
+                LogDefault(
+                    $"ODIN Transport: OnServerConnected called with connectionId: {peerJoinedEventArgs.Peer.Id}");
                 OnServerConnected?.Invoke((int)peerJoinedEventArgs.Peer.Id);
             }
         }
@@ -567,7 +580,7 @@ public class OdinTransport : Transport
             if (IsPeerServer(peerJoinedEventArgs.Peer))
             {
                 _hostPeerId = peerJoinedEventArgs.Peer.Id;
-                if (debug) Debug.Log($"ODIN Transport: Server found in room with peer id: {_hostPeerId}");
+                LogDefault($"ODIN Transport: Server found in room with peer id: {_hostPeerId}");
             }
         }
     }
@@ -596,7 +609,8 @@ public class OdinTransport : Transport
 
         if (_isServer)
         {
-            if (debug) Debug.Log($"ODIN Transport: OnServerDisconnected called with connectionId: {arg1.PeerId}");
+            if (debugLevel >= OdinTransportDebugLevel.Information)
+                Debug.Log($"ODIN Transport: OnServerDisconnected called with connectionId: {arg1.PeerId}");
             OnServerDisconnected?.Invoke((int)arg1.PeerId);
         }
         else
@@ -630,9 +644,9 @@ public class OdinTransport : Transport
                 OnClientConnected?.Invoke();
             }
 
-            if (debug)
-                Debug.Log(
-                    $"ODIN Transport: OnServerDataReceived called with connectionId: {messageReceivedEventArgs.PeerId}, {messageReceivedEventArgs.Data.Length} bytes");
+            LogDefault(
+                $"ODIN Transport: OnServerDataReceived called with connectionId: {messageReceivedEventArgs.PeerId}, {messageReceivedEventArgs.Data.Length} bytes");
+
             OnServerDataReceived?.Invoke((int)messageReceivedEventArgs.PeerId,
                 new ArraySegment<byte>(messageReceivedEventArgs.Data), Channels.Reliable);
         }
@@ -645,16 +659,40 @@ public class OdinTransport : Transport
                 _isConnected = true;
                 _connectedRoom = roomObject as Room;
 
-                if (debug) Debug.Log("ODIN Transport: OnClientConnected called in OnMessageReceived");
+                LogVerbose("ODIN Transport: OnClientConnected called in OnMessageReceived");
 
                 OnClientConnected?.Invoke();
             }
 
-            if (debug)
-                Debug.Log($"ODIN Transport: OnClientDataReceived called, {messageReceivedEventArgs.Data.Length} bytes");
+            LogVerbose($"ODIN Transport: OnClientDataReceived called, {messageReceivedEventArgs.Data.Length} bytes");
             OnClientDataReceived?.Invoke(new ArraySegment<byte>(messageReceivedEventArgs.Data), Channels.Reliable);
         }
     }
 
     #endregion
+
+    private void LogVerbose(string message)
+    {
+        if (ShouldLogVerbose()) Debug.Log(message);
+    }
+
+    private void LogDefault(string message)
+    {
+        if (ShouldLogDefault()) Debug.Log(message);
+    }
+
+    private bool ShouldLogDefault()
+    {
+        return ShouldLog(OdinTransportDebugLevel.Log);
+    }
+
+    private bool ShouldLogVerbose()
+    {
+        return ShouldLog(OdinTransportDebugLevel.Verbose);
+    }
+
+    private bool ShouldLog(OdinTransportDebugLevel startLogLevel)
+    {
+        return debugLevel >= startLogLevel;
+    }
 }
