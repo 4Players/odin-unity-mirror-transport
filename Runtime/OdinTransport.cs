@@ -39,7 +39,6 @@ public enum OdinTransportPeerType
 public enum OdinTransportDebugLevel
 {
     None = 0,
-    Information = 1,
     Log = 2,
     Verbose = 3
 }
@@ -246,6 +245,11 @@ public class OdinTransport : Transport
             return;
         }
 
+        if (_isConnected)
+            return;
+
+        _roomId = room;
+
         // Setup the ODIN event handlers
         SetupOdinEventHandlers();
 
@@ -312,7 +316,7 @@ public class OdinTransport : Transport
             return;
         }
 
-        if (debugLevel >= OdinTransportDebugLevel.Information) Debug.Log($"ODIN Transport: Client Disconnect");
+        LogDefault("ODIN Transport: Client Disconnect");
 
         // Remove all listeners except the room left listener (we need that event to clean up)
         RemoveOdinEventHandlers();
@@ -491,6 +495,7 @@ public class OdinTransport : Transport
                 {
                     LogDefault("ODIN Transport: OnClientConnected called");
 
+                    _hostPeerId = remotePeer.Id;
                     OnClientConnected?.Invoke();
                     return;
                 }
@@ -609,8 +614,7 @@ public class OdinTransport : Transport
 
         if (_isServer)
         {
-            if (debugLevel >= OdinTransportDebugLevel.Information)
-                Debug.Log($"ODIN Transport: OnServerDisconnected called with connectionId: {arg1.PeerId}");
+            LogDefault($"ODIN Transport: OnServerDisconnected called with connectionId: {arg1.PeerId}");
             OnServerDisconnected?.Invoke((int)arg1.PeerId);
         }
         else
@@ -635,15 +639,11 @@ public class OdinTransport : Transport
         if (!IsNetworkingRoom(roomObject))
             return;
 
+        if (!_isConnected)
+            return;
+        
         if (_isServer)
         {
-            if (!_isConnected)
-            {
-                _isConnected = true;
-                _connectedRoom = roomObject as Room;
-                OnClientConnected?.Invoke();
-            }
-
             LogDefault(
                 $"ODIN Transport: OnServerDataReceived called with connectionId: {messageReceivedEventArgs.PeerId}, {messageReceivedEventArgs.Data.Length} bytes");
 
@@ -654,15 +654,6 @@ public class OdinTransport : Transport
         {
             // ODIN SDK sends RoomJoined message at the very last moment, sometimes, a message is received before the RoomJoined event is fired
             // Mirror expects OnClientConnected to be called first, so we call it here if it hasn't been called yet
-            if (!_isConnected)
-            {
-                _isConnected = true;
-                _connectedRoom = roomObject as Room;
-
-                LogVerbose("ODIN Transport: OnClientConnected called in OnMessageReceived");
-
-                OnClientConnected?.Invoke();
-            }
 
             LogVerbose($"ODIN Transport: OnClientDataReceived called, {messageReceivedEventArgs.Data.Length} bytes");
             OnClientDataReceived?.Invoke(new ArraySegment<byte>(messageReceivedEventArgs.Data), Channels.Reliable);
