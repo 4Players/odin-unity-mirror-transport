@@ -266,20 +266,22 @@ public class OdinTransport : Transport
     public override void ClientSend(ArraySegment<byte> segment, int channelId = Channels.Reliable)
     {
         if (!OdinHandler.Instance || !OdinHandler.Instance.Rooms.Contains(_roomId))
+        {
+            LogVerbose($"ODIN Transport: Client send refused, OdinHandler room list does not contain {_roomId}");
             return;
-
+        }
         if (!_isServer)
         {
             if (_hostPeerId <= 0)
             {
-                Debug.LogError("Could not send message, host peer id is not set");
+                Debug.LogError("OdinTransport: Could not send message, host peer id is not set");
                 OnClientError(TransportError.InvalidSend, "Could not send message, host peer id is not set");
                 return;
             }
 
             if (_connectedRoom == null)
             {
-                Debug.LogError("Could not send message, no room connected");
+                Debug.LogError("OdinTransport: Could not send message, no room connected");
                 return;
             }
 
@@ -296,7 +298,7 @@ public class OdinTransport : Transport
                 Debug.LogError("OdinTransport::ClientSend - _connectedRoom is invalid");
             else
             {
-                LogVerbose($"Sending message in room {_connectedRoom} to host {_hostPeerId}");
+                LogVerbose($"OdinTransport: Sending message in room {_connectedRoom.Config.Name} to host {_hostPeerId}, room data: {_connectedRoom}");
                 _connectedRoom?.SendMessageAsync(peerIdList, data);
 
                 OnClientDataSent?.Invoke(segment, channelId);
@@ -375,7 +377,7 @@ public class OdinTransport : Transport
     /// <param name="connectionId"></param>
     /// <param name="segment"></param>
     /// <param name="channelId"></param>
-    public override void ServerSend(int connectionId, ArraySegment<byte> segment, int channelId = Channels.Reliable)
+    public override async void ServerSend(int connectionId, ArraySegment<byte> segment, int channelId = Channels.Reliable)
     {
         if (_isServer)
         {
@@ -393,8 +395,15 @@ public class OdinTransport : Transport
             byte[] data = new byte[segment.Count];
             Array.Copy(segment.Array, segment.Offset, data, 0, segment.Count);
 
-            _connectedRoom?.SendMessageAsync(peerIdList, data);
-            OnServerDataSent?.Invoke(connectionId, segment, channelId);
+            bool sendMessageAsync = await _connectedRoom?.SendMessageAsync(peerIdList, data)!;
+            if(!sendMessageAsync)
+            {
+                Debug.LogWarning("ODIN Transport: Send message failed.");
+            }
+            else
+            {
+                OnServerDataSent?.Invoke(connectionId, segment, channelId);
+            }
         }
     }
 
@@ -471,15 +480,18 @@ public class OdinTransport : Transport
     /// <param name="args"></param>
     private void OnRoomJoined(RoomJoinedEventArgs args)
     {
+        string roomName = args.Room.Config.Name;
         // Check if the room id matches the room id we are connected to for networking
-        if (args.Room.GetRoomId() != _roomId)
+        if (roomName != _roomId)
         {
+            LogVerbose($"ODIN Transport: OnRoomJoined refused for {roomName} , not in networking room {_roomId}.");
             return;
         }
 
 
         if (_isConnected)
         {
+            LogVerbose("ODIN Transport: Already connected, OnRoomJoined refused.");
             return;
         }
 
@@ -493,7 +505,7 @@ public class OdinTransport : Transport
             {
                 if (IsPeerServer(remotePeer))
                 {
-                    LogDefault("ODIN Transport: OnClientConnected called");
+                    LogDefault("ODIN Transport: Found host, OnClientConnected called");
 
                     _hostPeerId = remotePeer.Id;
                     OnClientConnected?.Invoke();
@@ -561,8 +573,10 @@ public class OdinTransport : Transport
     private void OnPeerJoined(object roomObject, PeerJoinedEventArgs peerJoinedEventArgs)
     {
         if (!IsNetworkingRoom(roomObject))
+        {
+            LogVerbose("ODIN Transport: OnPeerJoined refused, not in networking room.");
             return;
-
+        }
         if (_isServer)
         {
             // Make sure this is not another server
@@ -595,7 +609,7 @@ public class OdinTransport : Transport
         bool isNetworkingRoom = false;
         if (roomObject is Room room)
         {
-            isNetworkingRoom = room.GetRoomId() == _roomId;
+            isNetworkingRoom = room.Config.Name == _roomId;
         }
 
         return isNetworkingRoom;
@@ -636,11 +650,23 @@ public class OdinTransport : Transport
     /// <param name="messageReceivedEventArgs"></param>
     private void OnMessageReceived(object roomObject, MessageReceivedEventArgs messageReceivedEventArgs)
     {
-        if (!IsNetworkingRoom(roomObject))
-            return;
+        LogVerbose($"ODIN Transport: OnMessageReceived");
 
-        if (!_isConnected)
+        if (!IsNetworkingRoom(roomObject))
+        {
+            Debug.LogWarning($"Refusing message, not in networking room. Networking Room: {_roomId}, message sent on: {(roomObject as Room)?.Config.Name}");
             return;
+        }
+
+        if(!_isConnected && !_isServer)
+        {
+            // ODIN SDK sends RoomJoined message at the very last moment, sometimes, a message is received before the RoomJoined event is fired
+            // Mirror expects OnClientConnected to be called first, so we call it here if it hasn't been called yet
+            _isConnected = true;
+            _hostPeerId = messageReceivedEventArgs.PeerId;
+            _connectedRoom = roomObject as Room;
+            OnClientConnected?.Invoke();
+        }
         
         if (_isServer)
         {
@@ -652,9 +678,6 @@ public class OdinTransport : Transport
         }
         else
         {
-            // ODIN SDK sends RoomJoined message at the very last moment, sometimes, a message is received before the RoomJoined event is fired
-            // Mirror expects OnClientConnected to be called first, so we call it here if it hasn't been called yet
-
             LogVerbose($"ODIN Transport: OnClientDataReceived called, {messageReceivedEventArgs.Data.Length} bytes");
             OnClientDataReceived?.Invoke(new ArraySegment<byte>(messageReceivedEventArgs.Data), Channels.Reliable);
         }
