@@ -51,8 +51,9 @@ public enum OdinMessageType
     /// <summary>
     /// The default message type for mirror, containing mirror specific data
     /// </summary>
-    Default,
     Invalid,
+    Default,
+
     /// <summary>
     /// Does not contain mirror specific networking data. Signals client to disconnect from server
     /// </summary>
@@ -67,7 +68,7 @@ public struct OdinTransportMessage
     {
         this.messageType = type;
     }
-    
+
     public byte[] ToBytes()
     {
         return BitConverter.GetBytes((short)messageType);
@@ -88,8 +89,9 @@ public struct OdinTransportMessage
 }
 
 
-public struct HandleOdinMessagePaylout
+public struct HandleOdinMessagePayload
 {
+    public int connectionId;
     public OdinTransportMessage odinMessage;
     public ArraySegment<byte> networkMessage;
 }
@@ -214,10 +216,10 @@ public class OdinTransport : Transport
     /// </summary>
     public Action<string> onNoServerFound;
 
-    private Dictionary<OdinMessageType, Action<HandleOdinMessagePaylout>> clientMessageHandlers =
-        new Dictionary<OdinMessageType, Action<HandleOdinMessagePaylout>>();
-    private Dictionary<OdinMessageType, Action<HandleOdinMessagePaylout>> serverMessageHandlers =
-        new Dictionary<OdinMessageType, Action<HandleOdinMessagePaylout>>();
+    private delegate void HandleOdinMessageDelegate(HandleOdinMessagePayload payload);
+
+    private Dictionary<OdinMessageType, HandleOdinMessageDelegate> messageHandlers =
+        new Dictionary<OdinMessageType, HandleOdinMessageDelegate>();
 
     #region ODIN Helper Methods
 
@@ -308,12 +310,17 @@ public class OdinTransport : Transport
 
         _roomId = room;
 
+        messageHandlers.Add(OdinMessageType.Invalid, HandleInvalidOdinMessage);
+        messageHandlers.Add(OdinMessageType.DisconnectClient, ClientHandleClientDisconnect);
+        messageHandlers.Add(OdinMessageType.Default, ClientHandleDefaultOdinMessage);
+
         // Setup the ODIN event handlers
         SetupOdinEventHandlers();
 
         // Join the room
         JoinOdinRoom(room, OdinTransportPeerType.Client);
     }
+
 
     /// <summary>
     /// Send data to the server. Clients identify the server in the initial set of PeerJoined events by analyzing the
@@ -329,6 +336,7 @@ public class OdinTransport : Transport
             OnClientError(TransportError.InvalidSend, $"OdinHandler room list does not contain {_roomId}");
             return;
         }
+
         if (!_isServer)
         {
             if (_hostPeerId <= 0)
@@ -344,20 +352,21 @@ public class OdinTransport : Transport
                 OnClientError(TransportError.InvalidSend, $"Could not send message, connected room is invalid");
                 return;
             }
-            
+
             SendOdinMessage(_hostPeerId, segment);
             OnClientDataSent?.Invoke(segment, channelId);
         }
     }
 
-    private void SendOdinMessage(ulong targetId, ArraySegment<byte> segment, OdinMessageType type = OdinMessageType.Default)
+    private void SendOdinMessage(ulong targetId, ArraySegment<byte> segment,
+        OdinMessageType type = OdinMessageType.Default)
     {
         ulong[] peerIdList = new ulong[1];
         peerIdList[0] = targetId;
 
         byte[] data;
         int messageTypeSize = OdinTransportMessage.GetByteSize();
-        if(null != segment)
+        if (null != segment)
         {
             data = new byte[segment.Count + messageTypeSize];
             Array.Copy(segment.Array, segment.Offset, data, messageTypeSize, segment.Count);
@@ -389,11 +398,12 @@ public class OdinTransport : Transport
         LogDefault("ODIN Transport: Client Disconnect");
 
         // Remove all listeners except the room left listener (we need that event to clean up)
-        RemoveOdinEventHandlers();
+        CleanupCallbacks();
 
         // Leave the room
         LeaveOdinRoom();
     }
+
 
     /// <summary>
     /// Returns the server uri for the ODIN room in standard ODIN notation, which is odin://<gateway address>/<room id>
@@ -422,6 +432,10 @@ public class OdinTransport : Transport
         LogDefault("ODIN Transport: ServerStart");
         _isServer = true;
 
+        messageHandlers.Add(OdinMessageType.Invalid, HandleInvalidOdinMessage);
+        messageHandlers.Add(OdinMessageType.Default, ServerHandleDefaultOdinMessage);
+        messageHandlers.Add(OdinMessageType.DisconnectClient, ServerHandleDisconnectClientMessage);
+
         // Setup the ODIN event handlers
         SetupOdinEventHandlers();
 
@@ -439,13 +453,15 @@ public class OdinTransport : Transport
         JoinOdinRoom(room, OdinTransportPeerType.Server);
     }
 
+
     /// <summary>
     /// Send data to the specified connection. Uses Odins SendMessage to send the data to the specified peer.
     /// </summary>
     /// <param name="connectionId">Connection id is equal to target peer id</param>
     /// <param name="segment"></param>
     /// <param name="channelId"></param>
-    public override async void ServerSend(int connectionId, ArraySegment<byte> segment, int channelId = Channels.Reliable)
+    public override async void ServerSend(int connectionId, ArraySegment<byte> segment,
+        int channelId = Channels.Reliable)
     {
         if (_isServer)
         {
@@ -455,8 +471,8 @@ public class OdinTransport : Transport
                 OnServerError(connectionId, TransportError.InvalidSend, "Could not send message, no room connected");
                 return;
             }
-            
-            SendOdinMessage((ulong) connectionId, segment);
+
+            SendOdinMessage((ulong)connectionId, segment);
             OnServerDataSent?.Invoke(connectionId, segment, channelId);
         }
     }
@@ -467,8 +483,9 @@ public class OdinTransport : Transport
     /// <param name="connectionId"></param>
     public override void ServerDisconnect(int connectionId)
     {
+        LogDefault($"Odin Transport: Server Disconnect for connection {connectionId}");
+        SendOdinMessage((ulong)connectionId, null, OdinMessageType.DisconnectClient);
         // Do nothing - we cannot kick peers from the server
-        Debug.LogWarning("ODIN Transport does not support kicking peers from the server.");
     }
 
     /// <summary>
@@ -493,7 +510,7 @@ public class OdinTransport : Transport
         {
             LogDefault("ODIN Transport: ServerStop");
             // Remove all listeners except the room left listener (we need that event to clean up)
-            RemoveOdinEventHandlers();
+            CleanupCallbacks();
 
             // Leave the room
             OdinHandler.Instance.LeaveRoom(_roomId);
@@ -631,6 +648,7 @@ public class OdinTransport : Transport
             LogVerbose("ODIN Transport: OnPeerJoined refused, not in networking room.");
             return;
         }
+
         if (_isServer)
         {
             // Make sure this is not another server
@@ -708,11 +726,12 @@ public class OdinTransport : Transport
 
         if (!IsNetworkingRoom(roomObject))
         {
-            Debug.LogWarning($"Refusing message, not in networking room. Networking Room: {_roomId}, message sent on: {(roomObject as Room)?.Config.Name}");
+            Debug.LogWarning(
+                $"Refusing message, not in networking room. Networking Room: {_roomId}, message sent on: {(roomObject as Room)?.Config.Name}");
             return;
         }
 
-        if(!_isConnected && !_isServer)
+        if (!_isConnected && !_isServer)
         {
             // ODIN SDK sends RoomJoined message at the very last moment, sometimes, a message is received before the RoomJoined event is fired
             // Mirror expects OnClientConnected to be called first, so we call it here if it hasn't been called yet
@@ -724,26 +743,69 @@ public class OdinTransport : Transport
 
         byte[] messageBytes = messageReceivedEventArgs.Data;
         int messageSize = OdinTransportMessage.GetByteSize();
+
+        // Retrieve Odin Transport Message prefix
         byte[] odinMessageBytes = new ArraySegment<byte>(messageBytes, 0, messageSize).ToArray();
         OdinTransportMessage odinMessage = OdinTransportMessage.FromBytes(odinMessageBytes);
 
-        ArraySegment<byte> mirrorDataSegment = new ArraySegment<byte>(messageBytes, messageSize, messageBytes.Length - messageSize);
-        if (_isServer)
-        {
-            LogDefault(
-                $"ODIN Transport: OnServerDataReceived called with connectionId: {messageReceivedEventArgs.PeerId}, {messageBytes.Length} bytes");
+        // Extract the mirror data segment
+        ArraySegment<byte> mirrorDataSegment =
+            new ArraySegment<byte>(messageBytes, messageSize, messageBytes.Length - messageSize);
 
-            OnServerDataReceived?.Invoke((int)messageReceivedEventArgs.PeerId,
-                mirrorDataSegment, Channels.Reliable);
-        }
-        else
+        HandleOdinMessagePayload messagePayload = new HandleOdinMessagePayload()
         {
-            LogVerbose($"ODIN Transport: OnClientDataReceived called, {messageBytes.Length} bytes");
-            OnClientDataReceived?.Invoke(mirrorDataSegment, Channels.Reliable);
-        }
+            networkMessage = mirrorDataSegment,
+            odinMessage = odinMessage,
+            connectionId = (int)messageReceivedEventArgs.PeerId
+        };
+        // handle message based on message type
+        messageHandlers[odinMessage.messageType](messagePayload);
     }
 
     #endregion
+
+
+    #region HandleOdinMessages
+
+    private void ServerHandleDisconnectClientMessage(HandleOdinMessagePayload payload)
+    {
+        Debug.LogError(
+            "Odin Transport: Server received a 'Disconnect Client' message. Ignoring, because Server can not be kicked from Server.");
+    }
+
+    private void ServerHandleDefaultOdinMessage(HandleOdinMessagePayload payload)
+    {
+        LogDefault(
+            $"ODIN Transport: OnServerDataReceived called with connectionId: {payload.connectionId}, {payload.networkMessage.Count} bytes");
+
+        OnServerDataReceived?.Invoke(payload.connectionId,
+            payload.networkMessage, Channels.Reliable);
+    }
+
+    private void ClientHandleDefaultOdinMessage(HandleOdinMessagePayload payload)
+    {
+        LogVerbose($"ODIN Transport: OnClientDataReceived called, {payload.networkMessage.Count} bytes");
+        OnClientDataReceived?.Invoke(payload.networkMessage, Channels.Reliable);
+    }
+
+    private void ClientHandleClientDisconnect(HandleOdinMessagePayload payload)
+    {
+        LogDefault($"Odin Transport: Client received ClientDisonnect message, disconnecting.");
+        ClientDisconnect();
+    }
+
+    private void HandleInvalidOdinMessage(HandleOdinMessagePayload payload)
+    {
+        Debug.LogError("Odin Transport: Received an invalid odin message payload.");
+    }
+
+    #endregion
+
+    private void CleanupCallbacks()
+    {
+        messageHandlers.Clear();
+        RemoveOdinEventHandlers();
+    }
 
     private void LogVerbose(string message)
     {
