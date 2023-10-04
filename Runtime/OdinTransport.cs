@@ -709,6 +709,7 @@ public class OdinTransport : Transport
             if (arg1.PeerId == _hostPeerId)
             {
                 OnClientError(TransportError.Unexpected, "The server has left the room.");
+                LogDefault($"ODIN Transport: The server has left the room, peer Id: {arg1.PeerId}");
                 LeaveOdinRoom();
             }
         }
