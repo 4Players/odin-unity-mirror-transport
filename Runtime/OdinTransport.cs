@@ -411,7 +411,7 @@ public class OdinTransport : Transport
     /// <returns></returns>
     public override Uri ServerUri()
     {
-        return new Uri($"odin://{OdinHandler.Config.Server}/{_connectedRoom.GetRoomId()}");
+        return new Uri($"odin://{OdinHandler.Config.Server}/{_connectedRoom.Config.Name}");
     }
 
     /// <summary>
