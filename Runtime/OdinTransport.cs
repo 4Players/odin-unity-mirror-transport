@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Mirror;
 using OdinNative.Core.Imports;
 using OdinNative.Odin;
@@ -328,7 +329,7 @@ public class OdinTransport : Transport
     /// </summary>
     /// <param name="segment"></param>
     /// <param name="channelId"></param>
-    public override void ClientSend(ArraySegment<byte> segment, int channelId = Channels.Reliable)
+    public override async void ClientSend(ArraySegment<byte> segment, int channelId = Channels.Reliable)
     {
         if (!OdinHandler.Instance || !OdinHandler.Instance.Rooms.Contains(_roomId))
         {
@@ -353,12 +354,12 @@ public class OdinTransport : Transport
                 return;
             }
 
-            SendOdinMessage(_hostPeerId, segment);
+            await SendOdinMessage(_hostPeerId, segment);
             OnClientDataSent?.Invoke(segment, channelId);
         }
     }
 
-    private void SendOdinMessage(ulong targetId, ArraySegment<byte> segment,
+    private Task<bool> SendOdinMessage(ulong targetId, ArraySegment<byte> segment,
         OdinMessageType type = OdinMessageType.Default)
     {
         ulong[] peerIdList = new ulong[1];
@@ -380,7 +381,7 @@ public class OdinTransport : Transport
 
         byte[] typeBytes = new OdinTransportMessage(type).ToBytes();
         Array.Copy(typeBytes, 0, data, 0, messageTypeSize);
-        _connectedRoom?.SendMessageAsync(peerIdList, data);
+        return _connectedRoom?.SendMessageAsync(peerIdList, data);
     }
 
     /// <summary>
@@ -472,7 +473,7 @@ public class OdinTransport : Transport
                 return;
             }
 
-            SendOdinMessage((ulong)connectionId, segment);
+            await SendOdinMessage((ulong)connectionId, segment);
             OnServerDataSent?.Invoke(connectionId, segment, channelId);
         }
     }
