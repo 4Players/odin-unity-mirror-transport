@@ -1,6 +1,6 @@
 {
     "name": "Odin.Networking.Mirror",
-    "rootNamespace": "",
+    "rootNamespace": "Odin.Networking.Mirror",
     "references": [
         "odinsdk",
         "OdinUnity",
