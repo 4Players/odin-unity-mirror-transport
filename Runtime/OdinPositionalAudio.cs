@@ -189,7 +189,7 @@ namespace Odin.Networking.Mirror
         /// Return the proximity room name consisting of a prefix (proximityRoomName) and the networking room name as a suffix.
         /// </summary>
         /// <returns></returns>
-        private string GetFullPositionalRoomName()
+        public string GetFullPositionalRoomName()
         {
             return $"{positionalRoomName}-{GetNetworkingRoomName()}";
         }
@@ -198,7 +198,7 @@ namespace Odin.Networking.Mirror
         /// Retrieves the networking room name from the Mirror Server Uri.
         /// </summary>
         /// <returns>The networking room name.</returns>
-        private string GetNetworkingRoomName()
+        public string GetNetworkingRoomName()
         {
             Uri serverUri = Transport.active.ServerUri();
             return serverUri.Segments[^1]; // last segment contains networking room name
